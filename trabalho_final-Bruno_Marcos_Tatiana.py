@@ -97,17 +97,13 @@ class Window(Gtk.ApplicationWindow):
 
         ######
         # Help Menu
-        fmi = Gtk.MenuItem.new_with_label("Help")
+        fmi = Gtk.MenuItem.new_with_label("Info")
 
         menu = Gtk.Menu()
 
         self.filter_settings = Gtk.MenuItem.new_with_label("About...")
         self.filter_settings.connect("activate", self.about_window)
         menu.append(self.filter_settings)
-
-        self.outliers_settings = Gtk.MenuItem.new_with_label("Help! (still working)")
-        self.outliers_settings.connect("activate", self.about_window)
-        menu.append(self.outliers_settings)
 
         fmi.set_submenu(menu)
 
@@ -117,7 +113,6 @@ class Window(Gtk.ApplicationWindow):
         menubar.set_size_request(500, 5)
 
         self.add(self.grid)
-
 
     # Closes the app when called 'Quit'
     def quitApp(self, par):
@@ -438,14 +433,14 @@ class Window(Gtk.ApplicationWindow):
                 [a, o] = polar(tline, data_filtered)
                 ax.plot(a, o, '-', color="green", label="Savitzky-Golay Filter")
 
-        # plot if Savitzky-Golay selected
+        # plot if Whittaker selected
         if f_WT_E:
             data_filtered = self.filter_whittaker_eilers(data_raw)
             if graph_type == "Line":
-                ax.plot(tline, data_filtered, '-', color="purple", label="Wittaker-Eilers Filter")
+                ax.plot(tline, data_filtered, '-', color="purple", label="Wittaker Filter")
             elif graph_type == "Polar":
                 [a, o] = polar(tline, data_filtered)
-                ax.plot(a, o, '-', color="purple", label="Whittaker-Eilers Filter")
+                ax.plot(a, o, '-', color="purple", label="Whittaker Filter")
 
         plt.title(coverage.upper() + " Time Series", fontweight='bold')
         if graph_type=="Line":
@@ -1084,7 +1079,10 @@ class Window(Gtk.ApplicationWindow):
         nomes.set_justify(Gtk.Justification.CENTER)
         grid_about.attach(nomes, 1, 5, 1, 1)
 
-        grid_about.attach(Gtk.Label("\n\n"), 1, 6, 1, 1)
+        link_label = Gtk.Label()
+        link_label.set_markup("\nHelp: <a href=\"https://github.com/menimato/SER-347_MODIS_Time_Series_Filtering\" "
+                              "title=\"Help about using the script.\">link</a>.\n")
+        grid_about.attach( link_label, 1, 6, 1, 1)
         extra = Gtk.Label()
         extra.set_markup("<small>INSTITUTO NACIONAL DE\nPESQUISAS ESPACIAIS\n\nDeveloped for the lecture:\nSER-347 Introdução à Programação\npara Sensoriamento Remoto\n\nProfessors:\nGilberto Ribeiro de Queiroz\nThales Sehn Körting\nFabiano Morelli\n\n</small>")
         grid_about.attach(extra, 1, 7, 1, 1)
