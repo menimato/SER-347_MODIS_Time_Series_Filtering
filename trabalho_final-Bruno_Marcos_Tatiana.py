@@ -114,13 +114,14 @@ class Window(Gtk.ApplicationWindow):
 
         self.add(self.grid)
 
+        self.warning("Note", "Internet connection is required to run this program properly.")
+
     # Closes the app when called 'Quit'
     def quitApp(self, par):
         app.quit()
 
     # Add other widgets to select the parameters to get data from the server
     def data_selection(self, widget, cov):
-        self.warning("Note", "Internet connection is required to run this program properly.")
         self.win = Gtk.Window(title="Data: "+cov)
         self.win.connect("destroy", Gtk.main_quit)
 
@@ -1084,7 +1085,7 @@ class Window(Gtk.ApplicationWindow):
                               "title=\"Help about using the script.\">link</a>.\n")
         grid_about.attach( link_label, 1, 6, 1, 1)
         extra = Gtk.Label()
-        extra.set_markup("<small>INSTITUTO NACIONAL DE\nPESQUISAS ESPACIAIS\n\nDeveloped for the lecture:\nSER-347 Introdução à Programação\npara Sensoriamento Remoto\n\nProfessors:\nGilberto Ribeiro de Queiroz\nThales Sehn Körting\nFabiano Morelli\n\n</small>")
+        extra.set_markup("<small>INSTITUTO NACIONAL DE\t\t\t\t\t\t\t\t\nPESQUISAS ESPACIAIS\n\nDeveloped for the lecture:\nSER-347 Introdução à Programação\npara Sensoriamento Remoto\n\nProfessors:\nGilberto Ribeiro de Queiroz\nThales Sehn Körting\nFabiano Morelli\n\n</small>")
         grid_about.attach(extra, 1, 7, 1, 1)
 
         win.add(grid_about)
