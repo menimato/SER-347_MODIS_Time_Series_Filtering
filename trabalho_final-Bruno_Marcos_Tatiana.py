@@ -682,7 +682,7 @@ class Window(Gtk.ApplicationWindow):
     def filter_pyramid(self, ts):
         ts_filtered = ts.copy()
         global window_size_pyramid
-        n_p = window_size_pyramid
+        n_p = int((window_size_pyramid-1)/2)
 
         for j in range(n_p, len(ts_filtered) - n_p):
             ts_filtered[j] = 0.
