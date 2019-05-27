@@ -7,11 +7,11 @@ Autores:
 + Marcos Antônio de Almeida Rodrigues
 + Tatiana Dias Tardelli Uehara
 
-## Objetivo
+## 1. Objetivo
 
 O presente trabalho teve como objetivo a criação de uma ferramenta em Python com interface gráfica, para a obtenção e processamento de dados de séries temporais MODIS (MOD13Q1).
 
-## Pré-Requisitos
+## 2. Pré-Requisitos
 
 O _script_ necessita dos seguintes pacotes para Python 3.
 
@@ -29,9 +29,9 @@ O _script_ necessita dos seguintes pacotes para Python 3.
 
 Além das bibliotecas supracitadas, ressalta-se que uma conexão com a internet é imprescindível para o correto funcionamento do _script_.
 
-## Uso do _Script_
+## 3. Uso do _Script_
 
-### Processando Dados
+### 3.1 Processando Dados
 
 A ferramenta desenvolvida trata-se de um _script_ executável em Python 3. Ao executar o arquivo "./trabalho_final-Bruno_Marcos_Tatiana.py", o usuário depara-se com uma janela inicial, onde ações podem ser tomadas a partir da barra de menu superior, como ilustra a figura a seguir.
 
@@ -72,7 +72,7 @@ Um exemplo de gráfico do tipo Linha pode ser visto na figura a seguir.
 
 Ao optar por salvar os dados em uma tabela do tipo "_.csv_", o usuário pode armazenar todos os dados brutos e trabalhados de acordo com as opções selecionadas. No cabeçalho da tabela encontram-se todas as informações necessárias dos processamentos realizados sobre os dados.
 
-### Filtros
+### 3.2 Filtros
 
 O _script_ oferece 5 opções de aplições de filtros, sendo elas:
 
@@ -96,7 +96,7 @@ O filtro de Savitzky-Golay é descrito neste [artigo](https://pubs.acs.org/doi/p
 
 O filtro de Whittaker-Eilers é descrito de forma completa neste [artigo](https://pubs.acs.org/doi/abs/10.1021/ac034173t). Os parâmetros de entrada são o tamanho da janela de filtragem e a agressividade da filtragem.
 
-### Remoção de _Outliers_
+### 3.3 Remoção de _Outliers_
 
 É oferecida uma opção para a retirada de _outliers_ da série antes da filtragem. O processo é simples, implementado de acordo com este [artigo](https://www.mdpi.com/2072-4292/5/12/6159). Caso detectada a ocorrência de um _outlier_ na série, este é substituído pela interpolação simples de seus vizinhos imediatos à esquerda e direita.
 
@@ -104,7 +104,7 @@ O processo necessita apenas de um parâmetro de entrada: a porcentagem limiar da
 
 ![alt text](./Figures/5.png "Janela de configuração do parâmetro da remoção dos outliers.")
 
-## Agradecimentos
+## 4. Agradecimentos
 
 Os autores gostariam de agradecer ao Prof. Gilberto Ribeiro de Queiroz, pelo auxílio quanto ao uso da biblioteca _wtss_.
 
