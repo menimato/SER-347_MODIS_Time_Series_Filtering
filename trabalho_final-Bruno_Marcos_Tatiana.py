@@ -5,19 +5,26 @@
 #   Marcos Antônio de Almeida Rodrigues
 #   Tatiana Dias Tardelli Uehara
 
-
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GObject
+from gi.repository import Gtk, GObject, GLib
 import sys
-from matplotlib import pyplot as plt
 import wtss
-import numpy as np
 import datetime
 import csv
 import scipy.sparse as sparse
 from scipy.sparse.linalg import splu
 import math
+import os.path as path
+from functools import partial
+from shapely.geometry import shape, Point
+from shapely.geometry.polygon import Polygon
+from time import time
+import matplotlib.animation as animation
+import matplotlib.pyplot as plt
+import multiprocessing as mp
+import numpy as np
+import shapefile as shp
 
 
 # Global parameters for the functions
@@ -44,8 +51,28 @@ sigma_GA = 1
 # Outliers removal
 percent_outliers_removal = 1
 
-class Window(Gtk.ApplicationWindow):
 
+def retrieveDataFromPoint2(lat, long, series, coverage, date1, date2, poly):
+    pt = Point(long, lat)
+
+    if poly.contains(pt):
+        result = None
+        while result is None:
+            try:
+                w = wtss.wtss("http://www.esensing.dpi.inpe.br")
+                ts = w.time_series(series, coverage, lat, long, start_date=date1, end_date=date2)
+
+                return ts[coverage]
+            except:
+                pass
+        return None
+    else:
+        return None
+
+class Window(Gtk.ApplicationWindow):
+    #########################################################################
+    # - Windows and buttons
+    #########################################################################
     # Start window
     def __init__(self, app):
         # Iniciates the window
@@ -61,13 +88,17 @@ class Window(Gtk.ApplicationWindow):
         fmi = Gtk.MenuItem.new_with_label("Process")
 
         menu = Gtk.Menu()
-        self.open = Gtk.MenuItem.new_with_label("MOD13Q1")
+        self.open = Gtk.MenuItem.new_with_label("Bands MOD13Q1")
         self.open.connect("activate", self.data_selection, "MOD13Q1")
         menu.append(self.open)
 
-        self.open = Gtk.MenuItem.new_with_label("MOD13Q1_M")
+        self.open = Gtk.MenuItem.new_with_label("Quality MOD13Q1")
         self.open.connect("activate", self.data_selection, "MOD13Q1_M")
         menu.append(self.open)
+
+        self.quit = Gtk.MenuItem.new_with_label("Area MOD13Q1")
+        self.quit.connect("activate", self.timelapse, "MOD13Q1")
+        menu.append(self.quit)
 
         self.quit = Gtk.MenuItem.new_with_label("Exit")
         self.quit.connect("activate", self.quitApp)
@@ -124,6 +155,10 @@ class Window(Gtk.ApplicationWindow):
     def data_selection(self, widget, cov):
         self.win = Gtk.Window(title="Data: "+cov)
         self.win.connect("destroy", Gtk.main_quit)
+
+        for child in self.grid.get_children():
+            if (type(child)!=type(Gtk.MenuBar())):
+                self.grid.remove(child)
 
         # Latitude entry
         self.entry_lat = Gtk.Entry()
@@ -349,16 +384,512 @@ class Window(Gtk.ApplicationWindow):
         else:
             self.warning("Warning", "Please select a series and a graph type.")
 
+    # Options for the timelapse visualization
+    def timelapse(self, widget, cov):
+        self.win = Gtk.Window(title="Data: "+cov)
+        self.win.connect("destroy", Gtk.main_quit)
+
+        for child in self.grid.get_children():
+            if (type(child)!=type(Gtk.MenuBar())):
+                self.grid.remove(child)
+
+        # Shapefile entry
+        self.entry_shp = Gtk.Entry()
+        self.button_shp = Gtk.Button(label="choose")
+        self.button_shp.connect("clicked", self.on_button_clicked_shp)
+
+        # Series entry
+        list_of_series = Gtk.ListStore(str)
+        w = wtss.wtss("http://www.esensing.dpi.inpe.br")
+        cv_scheme = w.describe_coverage(cov)
+        series = list(cv_scheme["attributes"].keys())
+        for serie in series:
+            list_of_series.append([serie])
+        self.ser_combo = Gtk.ComboBox.new_with_model(list_of_series)
+        renderer_text = Gtk.CellRendererText()
+        self.ser_combo.pack_start(renderer_text, True)
+        self.ser_combo.add_attribute(renderer_text, "text", 0)
+
+        # Start date entry
+        self.entry_s_date = Gtk.Entry()
+        self.entry_s_date.set_text("2005-01-01")
+
+        # End date entry
+        self.entry_e_date = Gtk.Entry()
+        self.entry_e_date.set_text("2015-01-01")
+
+        # Info label
+        self.shape_local = Gtk.Label(" ")
+
+        # Outliers check button
+        self.check_outlier = Gtk.CheckButton()
+        self.check_outlier.set_label("Use series with\noutliers removed")
+
+        # Outiers frame
+        self.frame_outliers = Gtk.Frame()
+        self.frame_outliers.set_label("Outliers")
+        self.frame_outliers.add(self.check_outlier)
+
+        # Process button
+        self.button = Gtk.Button(label="Process")
+        self.button.connect("clicked", self.on_button_clicked_timelapse)
+
+        # Progressbar
+        self.pb = Gtk.Label(" ")
+
+
+        ##### Adicionando os grids #####
+        self.grid.attach(Gtk.Label("Shapefile: "), 0, 8, 1, 1)
+        self.grid.attach(self.entry_shp, 1, 8, 1, 1)
+        self.grid.attach(self.button_shp, 2, 8, 1, 1)
+        self.grid.attach(self.shape_local, 1, 9, 1, 1)
+
+        self.grid.attach(Gtk.Label("Series: "), 0, 3, 1, 1)
+        self.grid.attach(self.ser_combo, 1, 3, 1, 1)
+
+        label_s_date = Gtk.Label("Start date:")
+        self.grid.attach(label_s_date, 0, 4, 1, 1)
+        self.grid.attach(self.entry_s_date, 1, 4, 1, 1)
+
+        self.grid.attach(Gtk.Label("End date:"), 0, 5, 1, 1)
+        self.grid.attach(self.entry_e_date, 1, 5, 1, 1)
+
+        self.grid.attach(self.frame_outliers, 1, 7, 1, 1)
+
+        self.grid.attach(self.pb, 0, 10, 2, 1)
+
+        self.grid.attach(self.button, 1, 12, 1, 1)
+        self.grid.set_row_spacing(6)
+        self.grid.set_column_spacing(6)
+
+        info = Gtk.Label("\nWARNING: It is recommended to use shapefiles"
+                         "\nwith a single polygon with a few vertices in it,"
+                         "\nof small areas."
+                         "\nReference system EPSG 4326.\n")
+        self.grid.attach_next_to(info, self.ser_combo, Gtk.PositionType.TOP, 2, 1)
+
+        self.add(self.grid)
+
+        self.show_all()
+
+    # Bindings to call the area animation
+    def on_button_clicked_timelapse(self, args):
+        tree_iter = self.ser_combo.get_active_iter()
+        if tree_iter is not None:
+            model = self.ser_combo.get_model()
+            serie = model[tree_iter][0]
+            try:
+                date1 = datetime.datetime.strptime(self.entry_s_date.get_text(), "%Y-%m-%d")
+                date2 = datetime.datetime.strptime(self.entry_e_date.get_text(), "%Y-%m-%d")
+                if (date2 - date1).days < 0:
+                    print((date2 - date1).days)
+                    int('a')
+
+                if not path.exists(str(self.entry_shp.get_text())) or str(self.entry_shp.get_text()) is None:
+                    int('a')
+
+                sf = shp.Reader(str(self.entry_shp.get_text())[:-4])
+                n = 0
+                matplotDict = []
+
+                for shape in sf.shapeRecords():  # Iterate through shapes in shapefile
+                    x = [i[0] for i in shape.shape.points[:]]  # Initially for use in matplotlib to check shapefile
+                    y = [i[1] for i in shape.shape.points[:]]  # Initially for use in matplotlib to check shapefile
+                    for i in x:
+                        matplotDict.append(
+                            (x[x.index(i)], y[x.index(i)]))  # Convert coordinates to be read by Shapely pkg
+
+                    poly = Polygon(matplotDict)  # main
+                    n += 1
+
+                self.callMapAnimation(x,
+                                      y,
+                                      str(self.entry_s_date.get_text()),
+                                      str(self.entry_e_date.get_text()),
+                                      "MOD13Q1",
+                                      serie,
+                                      poly,
+                                      self.check_outlier.get_active())
+
+            except ValueError:
+                self.pb.set_text("Error: Correct the input.")
+                message = "Input data inserted incorrectly."
+
+                try:
+                    datetime.datetime.strptime(self.entry_s_date.get_text(), "%Y-%m-%d")
+                except ValueError:
+                    message = message + "\n\t*Start date"
+
+                try:
+                    datetime.datetime.strptime(self.entry_e_date.get_text(), "%Y-%m-%d")
+                except ValueError:
+                    message = message + "\n\t*End date"
+
+                try:
+                    date1 = datetime.datetime.strptime(self.entry_s_date.get_text(), "%Y-%m-%d")
+                    date2 = datetime.datetime.strptime(self.entry_e_date.get_text(), "%Y-%m-%d")
+
+                    if (date2 - date1).days < 0:
+                        message = message + "\n\t*End date < Start date"
+
+                except ValueError:
+                    None
+
+                if not path.exists(str(self.entry_shp.get_text())):
+                    message = message + "\n\t*Wrong file path."
+
+                self.error_message("Error", message)
+        else:
+            self.warning("Warning", "Please select a series.")
+
+    def on_button_clicked_shp(self, args):
+        dialog = Gtk.FileChooserDialog("Please choose a file", self,
+                                       Gtk.FileChooserAction.OPEN,
+                                       (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                                        Gtk.STOCK_OPEN, Gtk.ResponseType.OK))
+
+        self.add_filters(dialog)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            print("Open clicked")
+            print("File selected: " + dialog.get_filename())
+            self.entry_shp.set_text(str(dialog.get_filename()))
+        elif response == Gtk.ResponseType.CANCEL:
+            print("Cancel clicked")
+
+        dialog.destroy()
+
+    def add_filters(self, dialog):
+
+        filter_py = Gtk.FileFilter()
+        filter_py.set_name("Shapefiles")
+        filter_py.add_pattern("*.shp")
+        dialog.add_filter(filter_py)
+
+    #########################################################################
+    # - Data retrieval and storage
+    #########################################################################
     # Gets the needed data from the server
     def retrieveDataFromPoint(self, lat, long, series, coverage, date1, date2):
         w = wtss.wtss("http://www.esensing.dpi.inpe.br")
         ts = w.time_series(series, coverage, lat, long, start_date=date1, end_date=date2)
-        if len(ts[coverage]) < window_size_mean or (len(ts[coverage]) < window_size_pyramid or (len(ts[coverage]) < window_size_GA or (len(ts[coverage]) < window_size_SG or len(ts[coverage]) < window_size_WT_E))):
+        if len(ts[coverage]) < window_size_mean or (len(ts[coverage]) < window_size_pyramid or (
+                len(ts[coverage]) < window_size_GA or (
+                len(ts[coverage]) < window_size_SG or len(ts[coverage]) < window_size_WT_E))):
             self.warning("Error", "Time interval shorter than what the filter's window sizes allow.")
             return None
         return ts.timeline, ts[coverage]
 
-    # Plots the filtered time series in a new window
+    # Opens a dialog so the user can choose a file to save the data
+    def get_file(self, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG, f_WT_E, coverage, series,
+                     lat, long):
+
+            # create a filechooserdialog to save:
+            # the arguments are: title of the window, parent_window, action,
+            # (buttons, response)
+            save_dialog = Gtk.FileChooserDialog("Pick a file", self,
+                                                Gtk.FileChooserAction.SAVE,
+                                                (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                                                 Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT))
+            # the dialog will present a confirmation dialog if the user types a file name that
+            # already exists
+            save_dialog.set_do_overwrite_confirmation(True)
+            # dialog always on top of the textview window
+            save_dialog.set_modal(True)
+            # connect the dialog to the callback function save_response_cb()
+            save_dialog.connect("response", self.save_data, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier,
+                                f_SG, f_WT_E, coverage, series, lat, long)
+            # show the dialog
+            save_dialog.show()
+
+    # Process and save data
+    def save_data(self, dialog, response_id, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG,
+                          f_WT_E, coverage, series, lat, long):
+
+                save_dialog = dialog
+                # if response is "ACCEPT" (the button "Save" has been clicked)
+                if response_id == Gtk.ResponseType.ACCEPT:
+                    # self.file is the currently selected file
+                    file_name = save_dialog.get_filename()
+
+                    if file_name[-4:] != ".csv" and file_name[-4:] != ".CSV":
+                        file_name = file_name + ".csv"
+
+                    # Prepares data to print in polar
+                    def polar(tline, data_raw):
+                        jdates = tline.copy()
+                        # julian days
+                        for i in range(len(jdates)):
+                            jdates[i] = (
+                                datetime.datetime.combine(jdates[i], datetime.datetime.min.time())).timetuple().tm_yday
+                        jdates = np.asarray(jdates).astype(np.float)
+                        a = jdates.copy()
+                        o = jdates.copy()
+                        for i in range(len(jdates)):
+                            a[i] = float(data_raw[i] * np.cos(2 * np.pi * jdates[i] / 365.0))
+                            o[i] = float(data_raw[i] * np.sin(2 * np.pi * jdates[i] / 365.0))
+                        return a, o
+
+                    data_wo_outlier = data_raw.copy()
+
+                    # Plot a line with outlier removed
+                    if f_outlier:
+                        data_wo_outlier = self.remove_outliers(data_wo_outlier)
+
+                    # Plot if pyramid filter selected
+                    if f_pyramid:
+                        data_pyramid = self.filter_pyramid(data_wo_outlier)
+
+                    # plot if mean filter selected
+                    if f_mean:
+                        data_filter_mean = self.filter_mean(data_wo_outlier)
+
+                    # plot if mean filter selected
+                    if f_gauss:
+                        data_filter_gauss = self.filter_gauss(data_wo_outlier)
+
+                    # plot if Savitzky-Golay selected
+                    if f_SG:
+                        data_SG = self.filter_savitzky_golay(data_wo_outlier)
+
+                    if f_WT_E:
+                        data_WT_E = self.filter_whittaker_eilers(data_wo_outlier)
+
+                    # Opens the CSV file, and writes data
+                    with open(file_name, mode='w') as CSV:
+
+                        CSV_writer = csv.writer(CSV, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+                        # Deals first with the labels
+                        list = []
+
+                        list.append("Coverage:")
+                        list.append(coverage)
+                        list.append("Series:")
+                        list.append(series)
+                        CSV_writer.writerow(list)
+
+                        list = []
+
+                        list.append("Latitude:")
+                        list.append(lat)
+                        list.append("Longitude:")
+                        list.append(long)
+                        CSV_writer.writerow(list)
+
+                        list = []
+                        CSV_writer.writerow(list)
+
+                        if f_outlier:
+                            list = []
+                            list.append("Outliers percentage removal [%]:")
+                            global percent_outliers_removal
+                            list.append(percent_outliers_removal)
+                            CSV_writer.writerow(list)
+                        if f_pyramid:
+                            list = []
+                            list.append("Pyramid filter parameters")
+                            CSV_writer.writerow(list)
+                            list = []
+                            list.append("")
+                            list.append("Window Size:")
+                            global window_size_pyramid
+                            list.append(window_size_pyramid)
+                            CSV_writer.writerow(list)
+                        if f_mean:
+                            list = []
+                            list.append("Mean filter parameters")
+                            CSV_writer.writerow(list)
+                            list = []
+                            list.append("")
+                            list.append("Window Size:")
+                            global window_size_mean
+                            list.append(window_size_mean)
+                            CSV_writer.writerow(list)
+                        if f_gauss:
+                            list = []
+                            list.append("Gauss filter parameters")
+                            CSV_writer.writerow(list)
+                            list = []
+                            list.append("")
+                            list.append("Window Size:")
+                            global window_size_GA
+                            list.append(window_size_mean)
+                            list.append("Standard Deviation:")
+                            global sigma_GA
+                            list.append(sigma_GA)
+                            CSV_writer.writerow(list)
+                        if f_SG:
+                            list = []
+                            list.append("Savitzky-Golay filter parameters")
+                            CSV_writer.writerow(list)
+                            list = []
+                            list.append("")
+                            global window_size_SG
+                            global order_SG
+                            global deriv_SG
+                            global rate_SG
+                            list.append("Window Size:")
+                            list.append(window_size_SG)
+                            list.append("Polynomial Order:")
+                            list.append(order_SG)
+                            list.append("Derivative Order:")
+                            list.append(deriv_SG)
+                            list.append("Rate:")
+                            list.append(rate_SG)
+                            CSV_writer.writerow(list)
+                        if f_WT_E:
+                            list = []
+                            list.append("Whittaker-Eilers filter parameters")
+                            CSV_writer.writerow(list)
+                            list = []
+                            list.append("")
+                            global window_size_WT_E
+                            global lmbd_WT_E
+                            list.append("Window Size:")
+                            list.append(window_size_WT_E)
+                            list.append("Roughness Penalty:")
+                            list.append(order_SG)
+                            CSV_writer.writerow(list)
+
+                        list = []
+                        CSV_writer.writerow(list)
+
+                        list.append("Date")
+                        list.append("Data Raw")
+                        if f_outlier:
+                            list.append("Data Without Outliers")
+                        if f_pyramid:
+                            list.append("Pyramid Filter")
+                        if f_mean:
+                            list.append("Mean Filter")
+                        if f_gauss:
+                            list.append("Gauss Filter")
+                        if f_SG:
+                            list.append("Savitzky-Golay Filter")
+                        if f_WT_E:
+                            list.append("Wittaker-Eilers Filter")
+
+                        CSV_writer.writerow(list)
+
+                        # Writes data itself
+                        for i in range(len(tline)):
+                            list = []
+
+                            list.append(tline[i])
+                            list.append((data_raw[i]))
+
+                            if f_outlier:
+                                list.append(data_wo_outlier[i])
+                            if f_pyramid:
+                                list.append(data_pyramid[i])
+                            if f_mean:
+                                list.append(data_filter_mean[i])
+                            if f_gauss:
+                                list.append(data_filter_gauss[i])
+                            if f_SG:
+                                list.append(data_SG[i])
+                            if f_WT_E:
+                                list.append(data_WT_E[i])
+
+                            CSV_writer.writerow(list)
+                        # destroy the FileChooserDialog
+                        dialog.destroy()
+                        self.warning("Save to CSV complete", "Your file were stored in " + file_name)
+
+                # if response is "CANCEL" (the button "Cancel" has been clicked)
+                elif response_id == Gtk.ResponseType.CANCEL:
+                    print("Save to CSV canceled successfully.")
+                    dialog.destroy()
+                else:
+                    dialog.destroy()
+
+    # Aquisition of a matrix representing an area
+    def retrieveDataMatrix(self, lat1, lat2, long1, long2, t1, t2, series, coverage, poly, out_rem):
+
+        self.pb.set_text("")
+        self.button.set_label("Processing...")
+        self.button.set_sensitive(False)
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+
+        t = time()
+
+        # Shows info
+        print("------------------------- RETRIEVING " + coverage.upper() + " DATA --------------------------")
+
+        print("Processing...")
+
+        # server data
+        w = wtss.wtss("http://www.esensing.dpi.inpe.br")
+
+        # gets coverage info
+        cv_scheme = w.describe_coverage(series)
+
+        # range i (height) and j (width) based on the spatial resolution
+        r_i = int((lat2 - lat1) / cv_scheme["spatial_resolution"]["y"]) + 1
+        r_j = int((long2 - long1) / cv_scheme["spatial_resolution"]["x"]) + 1
+
+        print(r_i, r_j)
+
+        # print info about the n° of lines and column, as well as an estimative for the time needed to do everything
+        y = (lat1 + (lat2 - lat1) / 2)
+        x = (long1 + (long2 - long1) / 2)
+        [time_series, data] = self.retrieveDataFromPoint(y, x, series, coverage, t1, t2)
+
+        coord = []
+
+        # loop that creates the iterations indexes
+        for i in range(r_i):
+            for j in range(r_j):
+                y = lat1 + i * cv_scheme["spatial_resolution"]["y"]
+                x = long1 + j * cv_scheme["spatial_resolution"]["x"]
+
+                coord.append([y, x])
+
+        with mp.Pool(processes=mp.cpu_count()) as pool:
+            data = pool.starmap(partial(retrieveDataFromPoint2),
+                                [(lat, long, series, coverage, t1, t2, poly) for (lat, long) in coord])
+
+        print("data type:", type(data))
+
+        # creates the variable to receive the data
+        all_data = np.zeros((r_i, r_j, len(time_series)))
+
+        for i in range(r_i):
+            for j in range(r_j):
+                if data[i * r_j + j] == None:
+                    all_data[i, j, :] = None
+                else:
+                    for k in range(all_data.shape[2]):
+                        all_data[i, j, k] = data[i * r_j + j][k]
+
+        if out_rem:
+            for i in range(r_i):
+                for j in range(r_j):
+                    all_data[i,j,:] = self.remove_outliers(all_data[i,j,:])
+
+        # print time
+        print("Total time: %.3f minutes" % ((time() - t) / 60))
+
+        self.pb.set_text("Total processing time: %.3f minutes" % ((time() - t) / 60))
+        self.button.set_label("Process")
+        self.button.set_sensitive(True)
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+
+        self.ts = time_series
+        self.all = all_data
+        self.i = r_i
+        self.j = r_j
+
+        self.showMapAnimation()
+
+    #########################################################################
+    # - Graphs
+    #########################################################################
+    # Plots the filtered time series in a new window, line graphs
     def showGraphFiltered(self, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG, f_WT_E, coverage, graph_type):
 
         # Prepares data to print in polar
@@ -374,6 +905,9 @@ class Window(Gtk.ApplicationWindow):
                 a[i] = float(data_raw[i] * np.cos(2 * np.pi * jdates[i] / 365.0))
                 o[i] = float(data_raw[i] * np.sin(2 * np.pi * jdates[i] / 365.0))
             return a,o
+
+        print(type(tline))
+        print(type(tline[0]))
 
         # Iniciates the plot
         if graph_type=="Line":
@@ -454,226 +988,31 @@ class Window(Gtk.ApplicationWindow):
 
         plt.show()
 
-    # Opens a dialog so the user can choose a file to save the data
-    def get_file(self, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG, f_WT_E, coverage, series, lat, long):
+    def callMapAnimation(self, x, y, t1, t2, series, cov, poly, out_rem):
 
-        # create a filechooserdialog to save:
-        # the arguments are: title of the window, parent_window, action,
-        # (buttons, response)
-        save_dialog = Gtk.FileChooserDialog("Pick a file", self,
-                                            Gtk.FileChooserAction.SAVE,
-                                            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                                             Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT))
-        # the dialog will present a confirmation dialog if the user types a file name that
-        # already exists
-        save_dialog.set_do_overwrite_confirmation(True)
-        # dialog always on top of the textview window
-        save_dialog.set_modal(True)
-        # connect the dialog to the callback function save_response_cb()
-        save_dialog.connect("response", self.save_data, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG, f_WT_E, coverage, series, lat, long)
-        # show the dialog
-        save_dialog.show()
+        self.task = self.retrieveDataMatrix(min(y), max(y), min(x), max(x), t1, t2, series, cov, poly, out_rem)
+        # GLib.idle_add(lambda: next(self.task, False), priority=GLib.PRIORITY_LOW)
 
-    # Process and save data
-    def save_data(self, dialog, response_id, tline, data_raw, f_pyramid, f_mean, f_gauss, f_outlier, f_SG, f_WT_E, coverage, series, lat, long):
+    def showMapAnimation(self):
+        fig, ax = plt.subplots()
+        ax.set_xlim((0, self.j))
+        ax.set_ylim((0, self.i))
+        im = ax.imshow(self.all[:, :, 0], cmap="summer")
+        title = ax.text(0.5, .95, "", bbox={'facecolor': 'w', 'alpha': 0.5, 'pad': 5},
+                        transform=ax.transAxes, ha="center")
 
-        save_dialog = dialog
-        # if response is "ACCEPT" (the button "Save" has been clicked)
-        if response_id == Gtk.ResponseType.ACCEPT:
-            # self.file is the currently selected file
-            file_name = save_dialog.get_filename()
+        def init():
+            im.set_data(self.all[:, :, 0])
+            return (im,)
 
-            if file_name[-4:] != ".csv" and file_name[-4:] != ".CSV":
-                file_name = file_name+".csv"
+        def animate(i):
+            data_slice = self.all[:, :, i]
+            im.set_data(data_slice)
+            title.set_text(str(self.ts[i]))
+            return (im, title,)
 
-            # Prepares data to print in polar
-            def polar(tline, data_raw):
-                jdates = tline.copy()
-                # julian days
-                for i in range(len(jdates)):
-                    jdates[i] = (datetime.datetime.combine(jdates[i], datetime.datetime.min.time())).timetuple().tm_yday
-                jdates = np.asarray(jdates).astype(np.float)
-                a = jdates.copy()
-                o = jdates.copy()
-                for i in range(len(jdates)):
-                    a[i] = float(data_raw[i] * np.cos(2 * np.pi * jdates[i] / 365.0))
-                    o[i] = float(data_raw[i] * np.sin(2 * np.pi * jdates[i] / 365.0))
-                return a, o
-
-            data_wo_outlier = data_raw.copy()
-
-            # Plot a line with outlier removed
-            if f_outlier:
-                data_wo_outlier = self.remove_outliers(data_wo_outlier)
-
-            # Plot if pyramid filter selected
-            if f_pyramid:
-                data_pyramid = self.filter_pyramid(data_wo_outlier)
-
-            # plot if mean filter selected
-            if f_mean:
-                data_filter_mean = self.filter_mean(data_wo_outlier)
-
-            # plot if mean filter selected
-            if f_gauss:
-                data_filter_gauss = self.filter_gauss(data_wo_outlier)
-
-            # plot if Savitzky-Golay selected
-            if f_SG:
-                data_SG = self.filter_savitzky_golay(data_wo_outlier)
-
-            if f_WT_E:
-                data_WT_E = self.filter_whittaker_eilers(data_wo_outlier)
-
-            # Opens the CSV file, and writes data
-            with open(file_name, mode='w') as CSV:
-
-                CSV_writer = csv.writer(CSV, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
-                # Deals first with the labels
-                list = []
-
-                list.append("Coverage:")
-                list.append(coverage)
-                list.append("Series:")
-                list.append(series)
-                CSV_writer.writerow(list)
-
-                list = []
-
-                list.append("Latitude:")
-                list.append(lat)
-                list.append("Longitude:")
-                list.append(long)
-                CSV_writer.writerow(list)
-
-                list = []
-                CSV_writer.writerow(list)
-
-                if f_outlier:
-                    list = []
-                    list.append("Outliers percentage removal [%]:")
-                    global percent_outliers_removal
-                    list.append(percent_outliers_removal)
-                    CSV_writer.writerow(list)
-                if f_pyramid:
-                    list = []
-                    list.append("Pyramid filter parameters")
-                    CSV_writer.writerow(list)
-                    list = []
-                    list.append("")
-                    list.append("Window Size:")
-                    global window_size_pyramid
-                    list.append(window_size_pyramid)
-                    CSV_writer.writerow(list)
-                if f_mean:
-                    list = []
-                    list.append("Mean filter parameters")
-                    CSV_writer.writerow(list)
-                    list = []
-                    list.append("")
-                    list.append("Window Size:")
-                    global window_size_mean
-                    list.append(window_size_mean)
-                    CSV_writer.writerow(list)
-                if f_gauss:
-                    list = []
-                    list.append("Gauss filter parameters")
-                    CSV_writer.writerow(list)
-                    list = []
-                    list.append("")
-                    list.append("Window Size:")
-                    global window_size_GA
-                    list.append(window_size_mean)
-                    list.append("Standard Deviation:")
-                    global sigma_GA
-                    list.append(sigma_GA)
-                    CSV_writer.writerow(list)
-                if f_SG:
-                    list = []
-                    list.append("Savitzky-Golay filter parameters")
-                    CSV_writer.writerow(list)
-                    list = []
-                    list.append("")
-                    global window_size_SG
-                    global order_SG
-                    global deriv_SG
-                    global rate_SG
-                    list.append("Window Size:")
-                    list.append(window_size_SG)
-                    list.append("Polynomial Order:")
-                    list.append(order_SG)
-                    list.append("Derivative Order:")
-                    list.append(deriv_SG)
-                    list.append("Rate:")
-                    list.append(rate_SG)
-                    CSV_writer.writerow(list)
-                if f_WT_E:
-                    list = []
-                    list.append("Whittaker-Eilers filter parameters")
-                    CSV_writer.writerow(list)
-                    list = []
-                    list.append("")
-                    global window_size_WT_E
-                    global lmbd_WT_E
-                    list.append("Window Size:")
-                    list.append(window_size_WT_E)
-                    list.append("Roughness Penalty:")
-                    list.append(order_SG)
-                    CSV_writer.writerow(list)
-
-
-                list = []
-                CSV_writer.writerow(list)
-
-                list.append("Date")
-                list.append("Data Raw")
-                if f_outlier:
-                    list.append("Data Without Outliers")
-                if f_pyramid:
-                    list.append("Pyramid Filter")
-                if f_mean:
-                    list.append("Mean Filter")
-                if f_gauss:
-                    list.append("Gauss Filter")
-                if f_SG:
-                    list.append("Savitzky-Golay Filter")
-                if f_WT_E:
-                    list.append("Wittaker-Eilers Filter")
-
-                CSV_writer.writerow(list)
-
-                # Writes data itself
-                for i in range(len(tline)):
-                    list = []
-
-                    list.append(tline[i])
-                    list.append((data_raw[i]))
-
-                    if f_outlier:
-                        list.append(data_wo_outlier[i])
-                    if f_pyramid:
-                        list.append(data_pyramid[i])
-                    if f_mean:
-                        list.append(data_filter_mean[i])
-                    if f_gauss:
-                        list.append(data_filter_gauss[i])
-                    if f_SG:
-                        list.append(data_SG[i])
-                    if f_WT_E:
-                        list.append(data_WT_E[i])
-
-                    CSV_writer.writerow(list)
-                # destroy the FileChooserDialog
-                dialog.destroy()
-                self.warning("Save to CSV complete", "Your file were stored in " + file_name)
-
-        # if response is "CANCEL" (the button "Cancel" has been clicked)
-        elif response_id == Gtk.ResponseType.CANCEL:
-            print("Save to CSV canceled successfully.")
-            dialog.destroy()
-        else:
-            dialog.destroy()
+        anim = animation.FuncAnimation(fig, animate, init_func=init, frames=self.all.shape[2], interval=int(10000/self.all.shape[2]), blit=True)
+        plt.show()
 
     #########################################################################
     # - Filtering methods
@@ -935,7 +1274,7 @@ class Window(Gtk.ApplicationWindow):
 
         self.percent_outlier_label = Gtk.Label("Percentage   ")
         self.percent_outlier_entry = Gtk.Entry()
-        self.percent_outlier_entry.set_text(str(rate_SG))
+        self.percent_outlier_entry.set_text(str(percent_outliers_removal))
 
         grid_edit.attach(self.percent_outlier_label, 0, 1, 1, 1)
         grid_edit.attach(self.percent_outlier_entry, 1, 1, 1, 1)
@@ -1067,7 +1406,7 @@ class Window(Gtk.ApplicationWindow):
         script_title.set_justify(Gtk.Justification.CENTER)
         grid_about.attach(script_title, 1,2,1,1)
         grid_about.attach_next_to(Gtk.Label("\n\n"), script_title, Gtk.PositionType.TOP, 1, 1)
-        grid_about.attach_next_to(Gtk.Label("\nvers. 0.6.42\n"), script_title, Gtk.PositionType.BOTTOM, 1, 1)
+        grid_about.attach_next_to(Gtk.Label("\nvers. 0.8.42\n"), script_title, Gtk.PositionType.BOTTOM, 1, 1)
         grid_about.attach_next_to(Gtk.Label("\t\t"), script_title, Gtk.PositionType.LEFT, 1, 1)
         grid_about.attach_next_to(Gtk.Label("\t\t"), script_title, Gtk.PositionType.RIGHT, 1, 1)
 
@@ -1085,7 +1424,7 @@ class Window(Gtk.ApplicationWindow):
                               "title=\"Help about using the script.\">link</a>.\n")
         grid_about.attach( link_label, 1, 6, 1, 1)
         extra = Gtk.Label()
-        extra.set_markup("<small>INSTITUTO NACIONAL DE\t\t\t\t\t\t\t\t\nPESQUISAS ESPACIAIS\n\nDeveloped for the lecture:\nSER-347 Introdução à Programação\npara Sensoriamento Remoto\n\nProfessors:\nGilberto Ribeiro de Queiroz\nThales Sehn Körting\nFabiano Morelli\n\n</small>")
+        extra.set_markup("<small>INSTITUTO NACIONAL DE\t\t\t\t\t\t\t\t\nPESQUISAS ESPACIAIS\n\nDeveloped during the lecture:\nSER-347 Introdução à Programação\npara Sensoriamento Remoto\n\nProfessors:\nGilberto Ribeiro de Queiroz\nThales Sehn Körting\nFabiano Morelli\n\n</small>")
         grid_about.attach(extra, 1, 7, 1, 1)
 
         win.add(grid_about)
